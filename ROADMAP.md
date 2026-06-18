@@ -4,17 +4,17 @@ planned work and known gaps in the protocol and its reference
 implementations. items here are aspirational; consult each host's own
 roadmap for scheduling.
 
-## tier 1 — loop-aware stages
+## tier 1: loop-aware stages
 
-- [ ] `before_turn` / `after_turn` — not implemented in any reference
+- [ ] `before_turn` / `after_turn`: not implemented in any reference
   host yet. needs upstream emission points in opencode and pi; airun
   can implement locally.
-- [ ] `on_error` — needs upstream emission point in opencode. airun
+- [ ] `on_error`: needs upstream emission point in opencode. airun
   and pi can implement locally.
 
-## tier 2 — interception
+## tier 2: interception
 
-- [ ] `on_permission` — needs upstream API in opencode (permission
+- [ ] `on_permission`: needs upstream API in opencode (permission
   engine is internal). airun and pi can implement locally.
 
 ## opencode-evolve upstream needs

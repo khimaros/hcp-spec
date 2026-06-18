@@ -1,4 +1,4 @@
-# hcp — harness control protocol
+# hcp: harness control protocol
 
 a host-agnostic contract for plugging external lifecycle hooks into a
 coding-agent harness. shared across multiple harnesses
@@ -7,17 +7,19 @@ coding-agent harness. shared across multiple harnesses
 [opencode-evolve](https://github.com/khimaros/opencode-evolve)); identical
 hook scripts run unchanged against any of them.
 
-deliberately minimal: subprocess fork per event, JSON in, JSONL out. no
-long-running daemon, no shared library, no language binding. any
-executable that can read stdin and write stdout qualifies.
+the design is deliberately minimal. the host forks a subprocess for
+each event, writes a JSON request to its stdin, and reads JSONL from
+its stdout. there is no long-running daemon, shared library, or
+language binding, so any executable that can read stdin and write
+stdout qualifies as a hook.
 
 ## terms
 
-- **host** — the agent harness embedding the protocol.
-- **hook script** — an executable file the host invokes per lifecycle
+- **host**: the agent harness embedding the protocol.
+- **hook script**: an executable file the host invokes per lifecycle
   event.
-- **stage** — a named lifecycle event (`mutate_request`, `before_tool`,
-  `before_stop`, …).
+- **stage**: a named lifecycle event (`mutate_request`, `before_tool`,
+  `before_stop`, ...).
 
 ## shape
 
@@ -29,16 +31,16 @@ newline).
 
 ```
 host                                hook script
- │   spawn `<script> <stage>`        │
- │ ────────────────────────────────► │
- │   {"hook": "<stage>", ...} EOF    │
- │ ──── stdin ─────────────────────► │
- │                                   │
- │ ◄──── stdout (JSONL) ──────────── │
- │   {"result": "..."}               │
- │   {"log": "debug line"}           │
- │                                   │
- │ ◄──── exit 0 / non-zero ───────── │
+ |   spawn `<script> <stage>`        |
+ | --------------------------------> |
+ |   {"hook": "<stage>", ...} EOF    |
+ | ---- stdin ---------------------> |
+ |                                   |
+ | <---- stdout (JSONL) ------------ |
+ |   {"result": "..."}               |
+ |   {"log": "debug line"}           |
+ |                                   |
+ | <---- exit 0 / non-zero --------- |
 ```
 
 see [SPEC.md](SPEC.md) for the full wire contract.
@@ -49,12 +51,12 @@ stages are tiered by what the host needs to do to fire them. a script
 that wants maximum portability stays in tier 0; scripts that need richer
 instrumentation accept that not every host can fire higher tiers yet.
 
-- **tier 0 — universal.** every harness can fire these today.
+- **tier 0: universal.** every harness can fire these today.
   - `discover`, `mutate_request`, `before_tool`, `after_tool`,
     `execute_tool`
-- **tier 1 — loop-aware.** requires per-turn and end-of-loop visibility.
+- **tier 1: loop-aware.** requires per-turn and end-of-loop visibility.
   - `before_turn`, `after_turn`, `before_stop`, `on_error`
-- **tier 2 — interception.** requires the harness to short-circuit a
+- **tier 2: interception.** requires the harness to short-circuit a
   host-internal decision.
   - `on_permission`
 
@@ -78,28 +80,25 @@ own documentation, not here.
 
 ## reference implementations
 
-- [airun](https://github.com/khimaros/airun) — one-shot CLI host.
-- [opencode-evolve](https://github.com/khimaros/opencode-evolve) —
+- [airun](https://github.com/khimaros/airun): one-shot CLI host.
+- [opencode-evolve](https://github.com/khimaros/opencode-evolve):
   opencode plugin host.
-- [pi-evolve](https://github.com/khimaros/pi-evolve) —
+- [pi-evolve](https://github.com/khimaros/pi-evolve):
   pi-coding-agent extension host.
 
 all three run identical hook scripts against the same contract.
 
 ## conformance testing
 
-[`testing/mock_openai.py`](testing/mock_openai.py) is a host-agnostic mock
-of an openai-compatible chat-completions endpoint, used by host integration
-tests to capture the LLM request a harness produces when a hook script is
-loaded. it spins up a threading http server, replies with a minimal SSE
-stream, and records every POST body for inspection.
+host integration tests capture the LLM request a harness produces when a hook
+script is loaded by pointing the harness at [fake-openai], a standalone,
+language-agnostic mock of an openai-compatible endpoint. it is a single binary
+launched as a subprocess: it announces its url on stdout, serves a programmable
+response stream, and records every request for inspection over an http admin
+api.
 
-reference implementations consume it by symlinking the canonical copy into
-their own `tests/` tree, e.g.:
+reference implementations build the sibling binary and launch it per scenario,
+reading `base_url=...` from its stdout and querying `GET /__admin/captures`. see
+the fake-openai README for the full contract.
 
-```
-ln -s ../../hcp-spec/testing/mock_openai.py tests/mock_openai.py
-```
-
-new host implementations are encouraged to do the same so a single mock
-is shared across the ecosystem.
+[fake-openai]: https://github.com/khimaros/fake-openai
