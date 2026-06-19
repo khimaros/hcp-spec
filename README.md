@@ -97,8 +97,15 @@ launched as a subprocess: it announces its url on stdout, serves a programmable
 response stream, and records every request for inspection over an http admin
 api.
 
-reference implementations build the sibling binary and launch it per scenario,
-reading `base_url=...` from its stdout and querying `GET /__admin/captures`. see
-the fake-openai README for the full contract.
+the protocol-level assertions and the canonical `hello` fixture are shared,
+living in [conformance/](conformance/) rather than being re-implemented in each
+host. a host's integration test subclasses `HostAdapter` with the host-specific
+seam (provider config, binary launch, env) and hands it to `run_conformance`;
+the shared driver builds the sibling fake-openai binary's client, launches the
+mock per scenario, reads `base_url=...` from its stdout, queries
+`GET /__admin/captures`, and asserts protocol fidelity on the captured request.
+host-unique scenarios (heartbeat, compaction, permission, ...) stay in each
+host's test file and reuse the shared helpers. see
+[conformance/README.md](conformance/README.md) and the fake-openai README.
 
 [fake-openai]: https://github.com/khimaros/fake-openai

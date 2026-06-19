@@ -31,3 +31,15 @@ roadmap for scheduling.
 - [ ] formal version negotiation. `host.version` is currently a
   monotonic integer with no negotiation; future versions may break
   backward compatibility and need a richer capability handshake.
+
+## conformance suite
+
+- [x] unify conformance testing across the reference hosts. the shared
+  driver and the canonical `hello` fixture live in `conformance/`; each
+  host ships a thin `HostAdapter` instead of a standalone test that
+  re-implements the protocol assertions.
+- [x] assert the `host` capability block. the hello hook echoes the
+  received `host` block into its system prompt and the driver verifies
+  each host surfaces `host.{name, version, stages}` with version 2, the
+  tier-0 universal stages, and canonical names only (no predecessor
+  aliases). all three reference hosts pass.
