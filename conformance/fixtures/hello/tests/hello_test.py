@@ -7,29 +7,11 @@ from pathlib import Path
 
 PASS = FAIL = 0
 
-PROMPT_CONTRACT = {
-    "preamble": "preamble.md",
-    "chat": "chat.md",
-    "heartbeat": "heartbeat.md",
-    "compaction": "compaction.md",
-    "recover": "recover.md",
-}
-
-def load_prompts(workspace):
-    """mirror evolve plugin's loadPrompts() for hook tests."""
-    out = {}
-    for name, file in PROMPT_CONTRACT.items():
-        p = os.path.join(workspace, "prompts", file)
-        if os.path.exists(p):
-            out[name] = open(p).read()
-    return out
-
 def call_hook(hook_path, name, ctx=None):
-    """call a hook and return (merged_result, logs, exit_code).
-    auto-injects ctx.prompts from workspace/prompts/ to mirror evolve."""
+    """call a hook and return (merged_result, logs, exit_code). v3: passes the workspace
+    root as `cwd` so the hook reads its OWN prompts (the host injects none)."""
     full = dict(ctx or {})
-    if "prompts" not in full:
-        full["prompts"] = load_prompts(os.path.dirname(os.path.dirname(hook_path)))
+    full.setdefault("cwd", os.path.dirname(os.path.dirname(hook_path)))
     input_data = json.dumps(full)
     proc = subprocess.run(
         [hook_path, name], input=input_data, capture_output=True, text=True,
@@ -155,6 +137,20 @@ try:
             utc_now = datetime.now(timezone.utc).replace(tzinfo=None)
             drift = abs((utc_now - reported).total_seconds())
             check("env timestamp is UTC (not local)", drift < 5, f"drift: {drift:.0f}s")
+
+    # --- v3: cwd base payload + hook-owned prompts ---
+
+    # the hook read preamble/chat from its OWN workspace (call_hook injects no prompts,
+    # only cwd), and echoes the cwd back so a host can be checked for passing it.
+    r, _, _ = call_hook(hook, "mutate_request", {"host": {"name": "t", "version": 3, "stages": []}})
+    st = "".join(r.get("system", []))
+    check("v3: hook composes its own preamble (no injected prompts)", "preamble" in st, st[:200])
+    check("v3: system echoes the base-payload cwd", f"<hcp-cwd>{tmp}</hcp-cwd>" in st, st[-200:])
+
+    # a host that omits cwd still works (the hook falls back to its own location).
+    r, _, _ = call_hook(hook, "mutate_request", {"cwd": None})
+    check("v3: cwd omitted -> hook still reads its own prompts",
+          "preamble" in "".join(r.get("system", [])))
 
     # --- heartbeat ---
 

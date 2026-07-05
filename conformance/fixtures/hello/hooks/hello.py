@@ -8,6 +8,19 @@ from typing import Annotated, TypedDict, get_type_hints
 
 WORKSPACE = Path(__file__).resolve().parent.parent
 NOTES = WORKSPACE / "traits"
+PROMPTS = WORKSPACE / "prompts"
+
+# v3: the hook reads its own prompt files from the workspace - the host injects no
+# prompts. the root is the `cwd` the host passes in the base payload (this script's own
+# location as a fallback for hosts that omit it).
+def load_prompts(ctx):
+    root = Path(ctx["cwd"]) if ctx.get("cwd") else WORKSPACE
+    out = {}
+    prompts_dir = root / "prompts"
+    if prompts_dir.is_dir():
+        for f in sorted(prompts_dir.glob("*.md")):
+            out[f.stem] = f.read_text()
+    return out
 
 class HookResult(TypedDict, total=False):
     system: list[str]
@@ -168,7 +181,10 @@ def tool_defs():
 def discover(ctx: dict) -> HookResult:
     names = [t["name"] for t in tool_defs()]
     debug(f"tools: {', '.join(names)}")
-    return {"name": "hello", "test": "hello_test.py", "tools": tool_defs()}
+    # a short heartbeat cadence so a v3 host schedules + fires a beat during conformance;
+    # v2 hosts ignore this and take their cadence from config (evolve.jsonc).
+    return {"name": "hello", "test": "hello_test.py",
+            "heartbeat": {"every_secs": 1}, "tools": tool_defs()}
 
 @hook
 def mutate_request(ctx: dict) -> HookResult:
@@ -185,11 +201,16 @@ def mutate_request(ctx: dict) -> HookResult:
     # ctx.prompts (the evolve prompt contract). hosts that need to gate
     # which paths reach this hook handle that themselves (see
     # opencode-evolve's agent_marker config).
-    system = system_prompt(ctx.get("prompts", {}), "chat")
+    system = system_prompt(load_prompts(ctx), "chat")
     # echo the received host-capability block so conformance tests can verify the
     # host advertises {name, version, stages} -- the hcp discovery mechanism.
     if host:
         system = system + [f"<hcp-host>{json.dumps(host, sort_keys=True)}</hcp-host>"]
+    # echo the v3 base-payload cwd so conformance can verify the host passes it (this is
+    # what lets a hook read its own workspace files).
+    cwd = ctx.get("cwd")
+    if cwd:
+        system = system + [f"<hcp-cwd>{cwd}</hcp-cwd>"]
     return {"system": system}
 
 @hook
@@ -226,7 +247,7 @@ def before_stop(ctx: dict) -> HookResult:
 @hook
 def heartbeat(ctx: dict) -> HookResult:
     debug(f"notes: {', '.join(note_names())}")
-    prompts = ctx.get("prompts", {})
+    prompts = load_prompts(ctx)
     user = (prompts.get("heartbeat") or "").strip()
     if not user:
         return {}

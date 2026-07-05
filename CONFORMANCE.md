@@ -21,18 +21,28 @@ payload exposes which stages will fire.
 upstream dependencies. "-" = not implemented. items marked "needs
 upstream" require a PR to the upstream host.
 
-| stage            | airun                              | pi-evolve                                   | opencode-evolve                                          |
-| ---------------- | ---------------------------------- | ------------------------------------------- | -------------------------------------------------------- |
-| `discover`       | local                              | local                                       | local                                                    |
-| `mutate_request` | local                              | local                                       | local                                                    |
-| `before_tool`    | local                              | local                                       | local (mutation response keys need upstream support)     |
-| `after_tool`     | local                              | local                                       | local                                                    |
-| `execute_tool`   | local                              | local                                       | local                                                    |
-| `before_turn`    | -                                  | -                                           | needs upstream emission point                            |
-| `after_turn`     | -                                  | -                                           | needs upstream emission point                            |
-| `before_stop`    | local (observational; see limits)  | translates `turn_end` with no pending tools | translates opencode's `idle` event                       |
-| `on_error`       | -                                  | -                                           | needs upstream emission point                            |
-| `on_permission`  | -                                  | -                                           | needs upstream API                                       |
+| stage            | airun                              | pi-evolve                                   | opencode-evolve                                          | hmux (`hmux face hcp`)                                   |
+| ---------------- | ---------------------------------- | ------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------- |
+| `discover`       | local                              | local                                       | local                                                    | local                                                    |
+| `mutate_request` | local                              | local                                       | local                                                    | local                                                    |
+| `before_tool`    | local                              | local                                       | local (mutation response keys need upstream support)     | local (deny/result short-circuit is a fidelity gap)      |
+| `after_tool`     | local                              | local                                       | local                                                    | local                                                    |
+| `execute_tool`   | local                              | local                                       | local                                                    | local (pi); opencode needs an in-process MCP shim        |
+| `before_turn`    | -                                  | -                                           | needs upstream emission point                            | -                                                        |
+| `after_turn`     | -                                  | -                                           | needs upstream emission point                            | -                                                        |
+| `before_stop`    | local (observational; see limits)  | translates `turn_end` with no pending tools | translates opencode's `idle` event                       | -                                                        |
+| `on_error`       | -                                  | -                                           | needs upstream emission point                            | -                                                        |
+| `on_permission`  | -                                  | -                                           | needs upstream API                                       | local (hub-normalized across every backend)              |
+
+hmux is a v3 host at the CLIENT layer (the `hmux face hcp` runner): it arms hmux's
+normalized interception hooks, so the mapped stages work across every backend (pi,
+opencode, ...) at once - notably `on_permission` is local for all of them. tool
+registration (`discover.tools` / `execute_tool`) is generic on the pi backend; opencode
+caches plugin tools, so it needs an in-process MCP shim. the v3 tier-3 extension stages
+`heartbeat` (hub-scheduled; host-driven heartbeat conformance passes) and
+`format_notification` are supported; `observe_message` and `recover` are not yet wired.
+verified by the shared driver at `../hmux/e2e/hcp_conform_test.py` (55/55 against the
+`hello` fixture, including the heartbeat battery).
 
 per-host gaps and tracking issues live in
 [ROADMAP.md](ROADMAP.md) and in each project's own roadmap.

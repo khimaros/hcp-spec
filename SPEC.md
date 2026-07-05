@@ -31,9 +31,22 @@ every stage's stdin payload includes at minimum:
 
 - `hook`: the stage name
 - `session`: `{"id": "..."}`. one-shot CLIs use a synthetic id.
-- `host`: `{"name": "...", "version": 2, "stages": [...]}` advertising
+- `host`: `{"name": "...", "version": 3, "stages": [...]}` advertising
   which stages this host actually fires (discovery only, no
-  negotiation)
+  negotiation). `version` is per-host; a host advertises the protocol
+  version it implements (currently 3).
+- `cwd` (v3): the workspace root. a hook reads its own files from here
+  (prompts, data, state); the host reads NO workspace file except the
+  hook scripts it discovers under `<cwd>/hooks`. a hook that needs
+  prompts, config, or persistent state owns and reads them itself. hosts
+  before v3 omit `cwd`; a hook may derive the root from its own path.
+
+> **v3 note — prompts are hook-owned.** earlier hosts (pi-evolve,
+> opencode-evolve) loaded a `prompts/` contract and injected it into every
+> stage as `ctx.prompts`. under v3 the host injects no prompt contract; a
+> hook reads its own prompt files from `cwd`. a host MAY still freeze the
+> composed system prompt per session for provider prompt-cache stability
+> (that is a host concern, orthogonal to who composes the text).
 
 stage-specific fields are listed under each stage below.
 
@@ -66,9 +79,16 @@ once per script at startup before any other stage.
 - `name`: short prefix used to namespace registered tools (defaults
   to the script's file stem)
 - `stages`: stages the script handles (advisory; helps hosts skip
-  invocations that would no-op)
+  invocations that would no-op). a host MAY use it to arm only the
+  interception hooks a script actually handles.
 - `tools`: tool definitions exposed to the LLM as `<prefix>_<short>`.
   see [tool parameter types](#tool-parameter-types).
+- `test` (optional): a command (relative to `cwd`) the host runs to
+  validate the hook before installing an edit to it (the recoverable
+  self-edit path). e.g. `"hello_test.py"`.
+- `heartbeat` (optional): `{ every_secs }`, the script's default
+  [heartbeat](#heartbeat) cadence, which the host programs its timer
+  from at startup (the hook persists runtime changes itself).
 
 ### `mutate_request`
 
@@ -115,9 +135,11 @@ model and can mutate it.
 
 **payload:**
 - `tool`: tool name
-- `call_id`: matches `before_tool`'s `call_id`
+- `call_id`: matches `before_tool`'s `call_id` (canonical spelling;
+  hooks SHOULD also tolerate the historical `callID`)
 - `args`: final args used (after any `before_tool` rewrite)
-- `result`: result string from the tool
+- `result`: result string from the tool. a host MAY carry it under
+  `output` instead; a hook SHOULD accept either.
 - `duration_ms`: wall-clock execution time
 - `turn`: the turn this call belonged to
 
@@ -222,6 +244,73 @@ context the static config cannot see.
   through to the interactive prompt. `allow` / `deny` short-circuit
   it.
 - `reason`: surfaced to the user when the hook short-circuits
+
+## tier 3: host extensions
+
+stages beyond the LLM loop that a host with autonomous / notification /
+recovery machinery fires. they are optional: a host advertises the ones it
+fires in `host.stages`, and a hook degrades gracefully when a stage never
+fires. these were informal host extensions (pi-evolve / opencode-evolve)
+before v3; they are specified here so identical hook scripts run across hosts.
+
+### `heartbeat`
+
+fires on a recurring cadence the host schedules, in a dedicated session, so
+an agent can act autonomously between user turns. the host drives one turn
+with the returned prompt; the hook is stateless, so anything durable (a run
+log, the chosen cadence) is the hook's own to persist under `cwd`.
+
+**payload:** base fields (the `session` id is the host's heartbeat session).
+
+**response:**
+- `system`: array of strings, the system prompt for the heartbeat turn
+- `user`: the user-role prompt that drives the turn (empty / omitted skips
+  this beat)
+
+**control surface.** the live schedule is host state (a timer). a host that
+fires `heartbeat` SHOULD expose it to the agent as two host-provided tools:
+- a **set** tool taking `every_secs` (0 disables), so the agent can retune
+  its own cadence at runtime
+- a **status** tool returning `{ every_secs, enabled, last_run, next_run }`
+
+the DURABLE cadence is the hook's: it declares a default via `discover`
+(below) and persists runtime changes under `cwd`, so a restart restores it.
+per-beat history (what each run did) is likewise hook-owned and queryable
+through the hook's own tools.
+
+### `observe_message`
+
+fires after each assistant message, so a hook can react to what was said
+(update state, queue a notification). observational: the loop does not wait
+on it.
+
+**payload:** `session`, plus the assistant `answer` / tool calls the host
+exposes.
+
+**response:** `modified` / `notify` / `actions` the host applies (see the
+host's own docs); a bare `{}` is the no-op default.
+
+### `format_notification`
+
+fires when the host has queued notifications (e.g. from a `notify` response
+key) to render into one user-facing message.
+
+**payload:**
+- `notifications`: the queued notification objects
+
+**response:**
+- `message`: the user-facing text (empty / omitted suppresses it)
+
+### `recover`
+
+fires when another stage in the host's recover set throws, so a hook can
+re-enter cleanly instead of the turn dying.
+
+**payload:**
+- `failed_hook`: the stage that threw
+- `error`: the error message
+
+**response:** `system` / `user`, a synthetic re-entry the host injects.
 
 ## tool parameter types
 

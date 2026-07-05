@@ -59,6 +59,7 @@ NOTE_PRIORITIES = {"low", "normal", "high"}
 REQUIRED_STAGES = {"discover", "mutate_request", "before_tool", "after_tool", "execute_tool"}
 PREDECESSOR_STAGES = {"tool_before", "tool_after", "idle", "turn_end", "run_end", "after_run"}
 HOST_BLOCK_RE = re.compile(r"<hcp-host>(.*?)</hcp-host>", re.DOTALL)
+CWD_BLOCK_RE = re.compile(r"<hcp-cwd>(.*?)</hcp-cwd>", re.DOTALL)
 
 try:
     import jsonschema
@@ -415,12 +416,23 @@ def assert_host_capability(body, adapter, runner):
         return
     runner.check(f"host.name advertised as '{adapter.name}'",
                  host.get("name") == adapter.name, f"got: {host.get('name')}")
-    runner.check("host.version is 2", host.get("version") == 2, f"got: {host.get('version')}")
+    runner.check(f"host.version is {adapter.version}",
+                 host.get("version") == adapter.version, f"got: {host.get('version')}")
     stages = set(host.get("stages") or [])
     runner.check("host.stages advertises the tier-0 universal stages",
                  REQUIRED_STAGES <= stages, f"missing: {sorted(REQUIRED_STAGES - stages)}")
     runner.check("host.stages uses canonical names (no predecessor aliases)",
                  not (PREDECESSOR_STAGES & stages), f"leaked: {sorted(PREDECESSOR_STAGES & stages)}")
+
+
+def assert_cwd(body, runner):
+    """v3: the base payload carries `cwd` (the workspace root), so a hook reads its own
+    files - prompts, data, state. the hello hook echoes it into the system prompt; read it
+    back out of the captured request."""
+    m = CWD_BLOCK_RE.search(system_text(body))
+    runner.check("base payload carries cwd (v3)",
+                 m is not None and bool(m.group(1).strip()),
+                 f"got: {m.group(1) if m else None}")
 
 
 def assert_build_request(body, fixture, adapter, runner):
@@ -431,6 +443,8 @@ def assert_build_request(body, fixture, adapter, runner):
     assert_note_schemas(body, runner)
     assert_enum_roundtrip(body, runner)
     assert_host_capability(body, adapter, runner)
+    if adapter.version >= 3:
+        assert_cwd(body, runner)
     adapter.extra_build_checks(body, fixture, runner)
 
 
@@ -481,6 +495,9 @@ class HostAdapter:
     concrete subclasses."""
 
     name = "?"
+    # the HCP host protocol version the host advertises (host.version). v3 is the default
+    # baseline (base-payload cwd, hook-owned prompts); a still-v2 host sets `version = 2`.
+    version = 3
     wants_heartbeat = False
     builtin_tools = set()
 
