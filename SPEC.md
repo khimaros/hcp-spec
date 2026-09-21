@@ -86,9 +86,10 @@ once per script at startup before any other stage.
 - `test` (optional): a command (relative to `cwd`) the host runs to
   validate the hook before installing an edit to it (the recoverable
   self-edit path). e.g. `"hello_test.py"`.
-- `heartbeat` (optional): `{ every_secs }`, the script's default
-  [heartbeat](#heartbeat) cadence, which the host programs its timer
-  from at startup (the hook persists runtime changes itself).
+
+a hook does NOT declare a heartbeat cadence here: the host owns scheduling
+end to end (see [heartbeat](#heartbeat)). a hook opts into beats simply by
+handling the `heartbeat` stage (and MAY list it in `stages`).
 
 ### `mutate_request`
 
@@ -105,7 +106,17 @@ request and can mutate or short-circuit.
   point)
 
 **response:**
-- `system`: array of strings appended to the system prompt
+- `system`: array of strings contributed to the system prompt
+- `system_mode`: how `system` composes with the host default.
+  `"append"` (default, back-compatible) appends `system` after the
+  host default, keeping that default as a cache-stable prefix;
+  `"replace"` makes `system` the hook's prompt and drops the host
+  default prose. a host that injects a model-invocable skills catalog
+  into its system prompt MUST carry that catalog across `replace`
+  (dropping it would silently revoke the model's skills); the catalog
+  is session-stable, so it stays inside the frozen result. the host
+  freezes the composed result per session either way, so `replace`
+  is at least as prompt-cache-stable as `append`.
 - `cancel`: `{reason: "..."}` to skip the LLM call entirely
 - `result`: synthetic assistant text to emit when `cancel` is set
 
@@ -257,26 +268,43 @@ before v3; they are specified here so identical hook scripts run across hosts.
 
 fires on a recurring cadence the host schedules, in a dedicated session, so
 an agent can act autonomously between user turns. the host drives one turn
-with the returned prompt; the hook is stateless, so anything durable (a run
-log, the chosen cadence) is the hook's own to persist under `cwd`.
+with the returned prompt. the host owns scheduling end to end -- WHETHER to
+beat, the cadence, the durable config, and the run history; a hook opts in
+simply by handling this stage (and MAY list `heartbeat` in `discover.stages`).
+the hook is stateless, and the host MAY pass recent history to this stage so
+the beat can see what it has already done.
 
-**payload:** base fields (the `session` id is the host's heartbeat session).
+**payload:** base fields (the `session` id is the host's heartbeat session),
+plus optional `history`: recent beat records the host has logged (below).
 
 **response:**
 - `system`: array of strings, the system prompt for the heartbeat turn
 - `user`: the user-role prompt that drives the turn (empty / omitted skips
   this beat)
 
-**control surface.** the live schedule is host state (a timer). a host that
-fires `heartbeat` SHOULD expose it to the agent as two host-provided tools:
-- a **set** tool taking `every_secs` (0 disables), so the agent can retune
-  its own cadence at runtime
-- a **status** tool returning `{ every_secs, enabled, last_run, next_run }`
+**control surface (host-owned).** the schedule, the durable config, and the
+run history are all HOST state. a host that fires `heartbeat` SHOULD expose
+them to the agent as host-provided tools:
+- a **set** tool taking `{ every_secs?, enabled? }`: retunes the live timer
+  AND persists it, so the change survives a restart. `enabled: false` (or
+  `every_secs: 0`) disables the beat; a later `enabled: true` restores it.
+- a **status** tool reporting `{ enabled, every_secs, next_run_at,
+  last_run_at, runs, source }` -- `source` says whether the current cadence
+  is the agent's persisted choice or a deployment default.
+- a **history** tool returning the last N beat records, each at least
+  `{ started_at, ended_at, ok }`.
 
-the DURABLE cadence is the hook's: it declares a default via `discover`
-(below) and persists runtime changes under `cwd`, so a restart restores it.
-per-beat history (what each run did) is likewise hook-owned and queryable
-through the hook's own tools.
+**durability + precedence.** the host persists `{ enabled, every_secs }`
+across restarts (storage host-defined) and restores its timer from that on
+startup. the effective config resolves highest priority first:
+1. a host deployment override that force-disables (e.g. an env flag) --
+   always wins, for eval/demo.
+2. the agent's persisted runtime state, once it has set one.
+3. the deployment default cadence (host config).
+
+with none of these set, the host does not fire a heartbeat. the hook declares
+nothing about scheduling, so identical hook scripts get durable control on
+any conforming host.
 
 ### `observe_message`
 
@@ -293,13 +321,32 @@ host's own docs); a bare `{}` is the no-op default.
 ### `format_notification`
 
 fires when the host has queued notifications (e.g. from a `notify` response
-key) to render into one user-facing message.
+key) to render them for the people who should hear about them.
 
 **payload:**
 - `notifications`: the queued notification objects
+- `sessions`: OPTIONAL. the sessions this notice could be delivered to, so a
+  hook can choose an audience without having to ask for one. each entry
+  carries at least `id`, and where the host knows them: `title`, `agent`,
+  `harness_id`, `updated_at`, and `identity` -- the bare id of the human who
+  has SPOKEN in that session. a host that does not model people omits it.
 
 **response:**
 - `message`: the user-facing text (empty / omitted suppresses it)
+- `to`: OPTIONAL. who should receive it. ABSENT means everyone the host would
+  normally tell, which is the behaviour a hook that ignores this key keeps.
+  present, it names an audience:
+  - `sessions`: a list of session ids
+  - `identity`: a bare identity id; matches sessions that person has spoken in
+
+  selectors UNION rather than intersect ("these sessions, and wherever this
+  person is talking"). an audience that names nobody -- `{}` -- reaches
+  nobody: absence and emptiness are deliberately different, because getting
+  that backwards would broadcast exactly the notices meant to be private.
+
+each hook's notice is its own notice. a host MUST NOT merge the `message` of
+several hooks into one before delivering it: they may have different
+audiences, and joining them also welds two unrelated sentences into one.
 
 ### `recover`
 
@@ -311,6 +358,21 @@ re-enter cleanly instead of the turn dying.
 - `error`: the error message
 
 **response:** `system` / `user`, a synthetic re-entry the host injects.
+
+### `compacting`
+
+fires before the host compacts (summarizes) a session's context, so a hook can
+supply its own summarization instructions instead of the backend's default.
+
+**payload:**
+- `prompt`: the current instructions (any user-supplied compaction request), which
+  the hook may replace
+- read-only context the backend provides (e.g. `history`)
+
+**response:**
+- `prompt`: the summarization instructions the backend runs the compaction with.
+  an empty/absent `prompt` means the host keeps its DEFAULT compaction -- the
+  fallback a host without a compacting hook (or one that abstains) always takes.
 
 ## tool parameter types
 
@@ -329,6 +391,19 @@ supported core types: `string`, `number`, `boolean`, `object`, `array`,
 `any`. `optional: true` marks the parameter as not required. hosts MAY
 support extended forms (e.g. element-typed arrays) but scripts targeting
 multiple hosts SHOULD stay within the core set.
+
+`optional` describes the CONTRACT, not one wire form. a host MAY serialize
+it either way when it builds the model's tool schema: omitted from
+`required`, or listed in `required` with a `null` arm (`anyOf: [T,
+{"type": "null"}]`). the second is what a host must emit if it asks its
+provider to constrain sampling to the schema -- strict JSON Schema has no
+way to spell "may be omitted" -- and it is worth allowing, since a tool
+schema comes from a third party and an argument the host cannot validate
+is a failure with nothing to tune. both forms mean the same thing to the
+script: the model passes `null` where it would otherwise have omitted the
+key, and `execute_tool` sees an absent value. conformance accepts either
+and distinguishes them, so a host may NOT use the null arm to quietly make
+a required parameter optional.
 
 `object` produces a JSON Schema with unconstrained values
 (`additionalProperties: {}`); there is no per-field schema. the LLM

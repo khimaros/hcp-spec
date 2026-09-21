@@ -21,7 +21,7 @@ payload exposes which stages will fire.
 upstream dependencies. "-" = not implemented. items marked "needs
 upstream" require a PR to the upstream host.
 
-| stage            | airun                              | pi-evolve                                   | opencode-evolve                                          | hmux (`hmux face hcp`)                                   |
+| stage            | hrns                               | pi-evolve                                   | opencode-evolve                                          | hmux (`hmux face hcp`)                                   |
 | ---------------- | ---------------------------------- | ------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------- |
 | `discover`       | local                              | local                                       | local                                                    | local                                                    |
 | `mutate_request` | local                              | local                                       | local                                                    | local                                                    |
@@ -41,8 +41,9 @@ registration (`discover.tools` / `execute_tool`) is generic on the pi backend; o
 caches plugin tools, so it needs an in-process MCP shim. the v3 tier-3 extension stages
 `heartbeat` (hub-scheduled; host-driven heartbeat conformance passes) and
 `format_notification` are supported; `observe_message` and `recover` are not yet wired.
-verified by the shared driver at `../hmux/e2e/hcp_conform_test.py` (55/55 against the
-`hello` fixture, including the heartbeat battery).
+verified by the shared driver at `../hmux/e2e/hcp_conform_test.py` (56/56 against the
+`hello` fixture, including the heartbeat battery; the host owns scheduling, so the driver
+sets the face's `--heartbeat-every-secs` rather than the hook declaring a cadence).
 
 per-host gaps and tracking issues live in
 [ROADMAP.md](ROADMAP.md) and in each project's own roadmap.

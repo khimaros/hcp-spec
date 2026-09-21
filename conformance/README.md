@@ -2,7 +2,7 @@
 
 shared, host-agnostic conformance testing for hcp hosts. the protocol-level
 assertions and the canonical `hello` fixture live here so the three reference
-hosts ([airun], [pi-evolve], [opencode-evolve]) do not each re-implement them.
+hosts ([hrns], [pi-evolve], [opencode-evolve]) do not each re-implement them.
 
 ## how it works
 
@@ -90,7 +90,7 @@ rather than a separate hook-input probe.
 host-specific (`extra_build_checks`): built-in tool names, prompt-file enums,
 and whether the system prompt reproduces the hook's preamble + chat verbatim.
 
-[airun]: https://github.com/khimaros/airun
+[hrns]: https://github.com/khimaros/hrns
 [pi-evolve]: https://github.com/khimaros/pi-evolve
 [opencode-evolve]: https://github.com/khimaros/opencode-evolve
 [fake-openai]: https://github.com/khimaros/fake-openai

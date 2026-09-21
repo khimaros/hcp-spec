@@ -1,0 +1,19 @@
+#!/usr/bin/env python3
+"""a minimal HCP hook that ABSTAINS: it declares itself on discover but returns nothing for
+every mutation stage. a conformant host must leave its own system prompt intact -- a hook's
+empty result must never clobber (or empty) the backend default. this guards the composability
+contract that append/replace both build on."""
+
+import json
+import sys
+
+stage = sys.argv[1] if len(sys.argv) > 1 else ""
+try:
+    json.load(sys.stdin)
+except Exception:
+    pass
+
+if stage == "discover":
+    # no `stages` list -> the host arms its default mutation stages; no tools.
+    print(json.dumps({"name": "abstain"}))
+# mutate_request (and every other stage): emit nothing, so the host keeps its own prompt.

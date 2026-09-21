@@ -181,10 +181,9 @@ def tool_defs():
 def discover(ctx: dict) -> HookResult:
     names = [t["name"] for t in tool_defs()]
     debug(f"tools: {', '.join(names)}")
-    # a short heartbeat cadence so a v3 host schedules + fires a beat during conformance;
-    # v2 hosts ignore this and take their cadence from config (evolve.jsonc).
-    return {"name": "hello", "test": "hello_test.py",
-            "heartbeat": {"every_secs": 1}, "tools": tool_defs()}
+    # the hook declares nothing about heartbeat scheduling: the host owns whether/when it
+    # beats (v3 from host config, v2 from evolve.jsonc). the hook just handles the stage.
+    return {"name": "hello", "test": "hello_test.py", "tools": tool_defs()}
 
 @hook
 def mutate_request(ctx: dict) -> HookResult:
@@ -197,10 +196,10 @@ def mutate_request(ctx: dict) -> HookResult:
     if "user" in ctx:
         debug(f"user_len={len(ctx.get('user') or '')}")
     debug(f"notes: {', '.join(note_names())}")
-    # hello appends a notes list and env block; preamble/chat come from
-    # ctx.prompts (the evolve prompt contract). hosts that need to gate
-    # which paths reach this hook handle that themselves (see
-    # opencode-evolve's agent_marker config).
+    # hello owns the whole system prompt: its preamble/chat (from ctx.prompts) plus its own
+    # notes list and env block. it REPLACES the host default rather than appending (system_mode
+    # below), so the composed prompt starts with the preamble. hosts that need to gate which
+    # paths reach this hook handle that themselves (see opencode-evolve's agent_marker config).
     system = system_prompt(load_prompts(ctx), "chat")
     # echo the received host-capability block so conformance tests can verify the
     # host advertises {name, version, stages} -- the hcp discovery mechanism.
@@ -211,7 +210,7 @@ def mutate_request(ctx: dict) -> HookResult:
     cwd = ctx.get("cwd")
     if cwd:
         system = system + [f"<hcp-cwd>{cwd}</hcp-cwd>"]
-    return {"system": system}
+    return {"system": system, "system_mode": "replace"}
 
 @hook
 def format_notification(ctx: dict) -> HookResult:
@@ -237,7 +236,7 @@ def before_stop(ctx: dict) -> HookResult:
     debug(f"session={session.get('id', '?')} answer_len={len(answer)}")
     # v2: hosts that distinguish loop exit causes pass `exit_reason` and
     # `final`. opencode/pi only fire on natural idle so they may omit
-    # both; airun always sets `final: true` (no re-entry).
+    # both; hrns always sets `final: true` (no re-entry).
     if "exit_reason" in ctx:
         debug(f"exit_reason={ctx.get('exit_reason')} final={ctx.get('final', False)}")
         if ctx.get("error"):
@@ -251,7 +250,7 @@ def heartbeat(ctx: dict) -> HookResult:
     user = (prompts.get("heartbeat") or "").strip()
     if not user:
         return {}
-    return {"system": system_prompt(prompts, "heartbeat"), "user": user}
+    return {"system": system_prompt(prompts, "heartbeat"), "user": user, "system_mode": "replace"}
 
 @hook
 def recover(ctx: dict) -> HookResult:
@@ -285,8 +284,10 @@ def after_tool(ctx: dict) -> HookResult:
 @hook
 def compacting(ctx: dict) -> HookResult:
     debug(f"notes: {', '.join(note_names())}")
-    # evolve falls back to the compaction.md contract file when we return nothing
-    return {}
+    # hello owns compaction: hand back its compaction.md as the summarization prompt. an
+    # empty prompt (no compaction.md) falls back to the backend's own compaction.
+    instructions = (load_prompts(ctx).get("compaction") or "").strip()
+    return {"prompt": instructions} if instructions else {}
 
 @hook
 def execute_tool(ctx: dict) -> HookResult:

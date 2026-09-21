@@ -119,6 +119,7 @@ try:
     system_text = "\n".join(r.get("system", []))
     check("request includes preamble", "preamble" in system_text)
     check("request includes chat prompt", "chat" in system_text)
+    check("request replaces the host default (not append)", r.get("system_mode") == "replace")
     check("request logs notes", any("notes:" in l for l in logs))
 
     # --- mutate_request env block ---
@@ -204,19 +205,19 @@ try:
     # of payload contents.
 
     r, logs, _ = call_hook(hook, "mutate_request", {
-        "host": {"name": "airun", "version": 2, "stages": ["mutate_request", "before_stop"]},
+        "host": {"name": "hrns", "version": 2, "stages": ["mutate_request", "before_stop"]},
         "system": "any composed prompt here",
         "user": "the user prompt",
         "model": "anthropic/claude-opus-4-7",
     })
-    check("mutate_request logs host name+version", any("host=airun v=2" in l for l in logs))
+    check("mutate_request logs host name+version", any("host=hrns v=2" in l for l in logs))
     check("mutate_request logs model", any("model=anthropic/claude-opus-4-7" in l for l in logs))
     check("mutate_request logs user_len", any("user_len=15" in l for l in logs))
     check("mutate_request returns system unconditionally", has_key(r, "system"))
 
     # any system shape works (str / list / absent)
     for sys_payload in ("a single string", ["a", "list", "of", "strs"], None):
-        ctx = {"host": {"name": "airun", "version": 2}, "user": "x", "model": "openai/gpt"}
+        ctx = {"host": {"name": "hrns", "version": 2}, "user": "x", "model": "openai/gpt"}
         if sys_payload is not None:
             ctx["system"] = sys_payload
         r, _, _ = call_hook(hook, "mutate_request", ctx)
@@ -269,7 +270,7 @@ try:
     # --- compacting ---
 
     r, logs, _ = call_hook(hook, "compacting")
-    check("compacting defers to evolve default (returns no prompt)", not has_key(r, "prompt"),
+    check("compacting returns the compaction.md prompt", "compaction" in (r.get("prompt") or ""),
           f"got: {r}")
     check("compacting logs notes", any("notes:" in l for l in logs))
 
@@ -411,7 +412,7 @@ try:
     check("heartbeat with history returns system", has_key(r, "system"))
 
     r, _, _ = call_hook(hook, "compacting", {"history": sample_history})
-    check("compacting with history defers to default", not has_key(r, "prompt"))
+    check("compacting with history returns the compaction prompt", has_key(r, "prompt"))
 
     r, _, _ = call_hook(hook, "recover", {"failed_hook": "test", "error": "x", "history": sample_history})
     check("recover with history returns system", has_key(r, "system"))

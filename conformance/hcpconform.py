@@ -1,6 +1,6 @@
 """shared hcp conformance harness.
 
-the three reference hosts (airun, pi-evolve, opencode-evolve) each capture the
+the three reference hosts (hrns, pi-evolve, opencode-evolve) each capture the
 llm request their harness produces when the canonical `hello` hook is loaded,
 point it at the shared fake-openai mock, and assert protocol fidelity on the
 captured chat-completions request. this module holds the parts that were
@@ -148,9 +148,58 @@ def required(body, name):
     return set(tool_params(body, name).get("required") or [])
 
 
+def is_nullable(schema):
+    """true when the param is a union carrying a `null` arm -- STRICT MODE'S SPELLING OF OPTIONAL.
+
+    a host may ask its provider to constrain sampling to the tool schema, which is worth doing:
+    the schema comes from a third party, and a malformed argument is a failure nobody can tune.
+    strict json-schema has no way to say "may be omitted", so an optional param arrives as
+    `anyOf: [T, {"type": "null"}]` AND listed in `required` -- the model passes null where it
+    would have omitted the key, and the tool sees the same absence either way.
+    """
+    variants = (schema or {}).get("anyOf") or (schema or {}).get("oneOf") or []
+    return any(isinstance(v, dict) and v.get("type") == "null" for v in variants)
+
+
+def unwrap_nullable(schema):
+    """the value schema inside a nullable union, or the schema unchanged.
+
+    only a SINGLE non-null arm is an unwrapping. a real union -- an enum spelled as `anyOf` of
+    `const` -- is left alone, because collapsing it would throw away the values.
+    """
+    if not isinstance(schema, dict):
+        return {}
+    if "type" in schema:
+        return schema
+    arms = [a for a in (schema.get("anyOf") or schema.get("oneOf") or [])
+            if isinstance(a, dict) and a.get("type") != "null"]
+    return arms[0] if len(arms) == 1 and "const" not in arms[0] else schema
+
+
+def param_type(schema):
+    """the declared type of a param, seeing through strict mode's nullable wrapper."""
+    return unwrap_nullable(schema).get("type")
+
+
+def is_optional(body, name, field):
+    """optional in EITHER spelling: absent from `required`, or present-but-nullable."""
+    return field not in required(body, name) or is_nullable(prop(body, name, field))
+
+
+def is_required(body, name, field):
+    """required in either spelling: listed in `required` AND not nullable.
+
+    MEMBERSHIP ALONE NO LONGER DISTINGUISHES. under strict every property is listed, so a check
+    that only asked "is it in `required`" would pass for an optional param too -- the null arm is
+    what separates them.
+    """
+    return field in required(body, name) and not is_nullable(prop(body, name, field))
+
+
 def enum_values(schema):
-    """allowed values of an enum-shaped param, normalizing the two dialects
-    hosts emit: a json-schema `enum`, or an `anyOf`/`oneOf` of `const`."""
+    """allowed values of an enum-shaped param, normalizing the dialects hosts emit: a json-schema
+    `enum`, an `anyOf`/`oneOf` of `const`, or either of those inside a nullable union."""
+    schema = unwrap_nullable(schema)
     if "enum" in schema:
         return set(schema["enum"])
     variants = schema.get("anyOf") or schema.get("oneOf") or []
@@ -237,7 +286,7 @@ def dump_artifacts(art_dir, prefix, result):
 def seed_workspace(dest, fixture=None, *, make_git=False):
     """copy the fixture tree into `dest` and mark its hooks executable, matching
     how a host discovers a workspace. `make_git` adds a .git marker for hosts
-    (airun) whose discovery walks up to a repo root."""
+    (hrns) whose discovery walks up to a repo root."""
     fixture = fixture or Fixture()
     shutil.copytree(fixture.root, dest)
     for p in (dest / "hooks").iterdir():
@@ -310,39 +359,51 @@ def assert_param_descriptions(body, runner, prefixes=None):
 
 
 def assert_note_schemas(body, runner):
-    """note_* parameter schemas preserve type, required-vs-optional, and the
-    priority enum end-to-end through the host's tool serialization."""
+    """note_* parameter schemas preserve type, required-vs-optional, and the priority enum
+    end-to-end through the host's tool serialization.
+
+    READ THROUGH STRICT MODE, which is a SPELLING and not a difference of contract: a host that
+    constrains sampling to these schemas must list every property in `required` and mark the
+    optional ones with a `null` arm. `param_type`, `is_optional` and `is_required` normalize both
+    forms, so a host is free to buy provider-side argument validation without failing conformance
+    for it -- and a host that gets the type or the optionality genuinely WRONG still fails, because
+    the null arm is what the optional check keys on rather than mere membership.
+    """
     p = prop(body, "hello_note_list", "include_hidden")
-    runner.check("note_list.include_hidden is boolean", p.get("type") == "boolean", f"got: {p}")
+    runner.check("note_list.include_hidden is boolean", param_type(p) == "boolean", f"got: {p}")
     runner.check("note_list.include_hidden is optional",
-                 "include_hidden" not in required(body, "hello_note_list"))
+                 is_optional(body, "hello_note_list", "include_hidden"), f"got: {p}")
 
     p = prop(body, "hello_note_read", "name")
-    runner.check("note_read.name is string", p.get("type") == "string", f"got: {p}")
-    runner.check("note_read.name is required", "name" in required(body, "hello_note_read"))
+    runner.check("note_read.name is string", param_type(p) == "string", f"got: {p}")
+    runner.check("note_read.name is required",
+                 is_required(body, "hello_note_read", "name"), f"got: {p}")
     p = prop(body, "hello_note_read", "limit")
-    runner.check("note_read.limit is number", p.get("type") == "number", f"got: {p}")
-    runner.check("note_read.limit is optional", "limit" not in required(body, "hello_note_read"))
+    runner.check("note_read.limit is number", param_type(p) == "number", f"got: {p}")
+    runner.check("note_read.limit is optional",
+                 is_optional(body, "hello_note_read", "limit"), f"got: {p}")
 
     for field in ("name", "content"):
         p = prop(body, "hello_note_write", field)
-        runner.check(f"note_write.{field} is string", p.get("type") == "string", f"got: {p}")
+        runner.check(f"note_write.{field} is string", param_type(p) == "string", f"got: {p}")
         runner.check(f"note_write.{field} is required",
-                     field in required(body, "hello_note_write"))
-    runner.check("note_write.tags is optional", "tags" not in required(body, "hello_note_write"))
+                     is_required(body, "hello_note_write", field), f"got: {p}")
+    runner.check("note_write.tags is optional",
+                 is_optional(body, "hello_note_write", "tags"))
     p = prop(body, "hello_note_write", "metadata")
-    runner.check("note_write.metadata is object", p.get("type") == "object", f"got: {p}")
+    runner.check("note_write.metadata is object", param_type(p) == "object", f"got: {p}")
     runner.check("note_write.metadata is optional",
-                 "metadata" not in required(body, "hello_note_write"))
+                 is_optional(body, "hello_note_write", "metadata"))
     p = prop(body, "hello_note_write", "priority")
     runner.check("note_write.priority enum is [low, normal, high]",
                  enum_values(p) == NOTE_PRIORITIES, f"got: {p}")
     runner.check("note_write.priority is optional",
-                 "priority" not in required(body, "hello_note_write"))
+                 is_optional(body, "hello_note_write", "priority"))
 
     p = prop(body, "hello_note_delete", "name")
-    runner.check("note_delete.name is string", p.get("type") == "string", f"got: {p}")
-    runner.check("note_delete.name is required", "name" in required(body, "hello_note_delete"))
+    runner.check("note_delete.name is string", param_type(p) == "string", f"got: {p}")
+    runner.check("note_delete.name is required",
+                 is_required(body, "hello_note_delete", "name"), f"got: {p}")
 
 
 def assert_note_tags_array(body, runner):
@@ -390,14 +451,33 @@ def assert_enum_roundtrip(body, runner):
 
 def assert_system_preamble_chat(body, fixture, runner):
     """hosts that forward the prompt contract compose the build system prompt
-    from the hook's preamble + chat stage; heartbeat must not leak in."""
+    from the hook's preamble + chat stage; heartbeat must not leak in. hello
+    returns system_mode=replace, so the hook's prompt is the WHOLE system prompt:
+    it must START with the preamble, with no host default prepended (the append
+    regression this guards against)."""
     text = system_text(body)
     runner.check("system prompt contains hello preamble verbatim",
                  fixture.preamble in text, text[:500])
     runner.check("system prompt contains hello chat stage verbatim",
                  fixture.chat in text, text[:500])
+    runner.check("system prompt STARTS WITH the preamble (replace drops the host default)",
+                 text.lstrip().startswith(fixture.preamble), text[:500])
     runner.check("system prompt does NOT include heartbeat stage body",
                  fixture.heartbeat not in text, text[:500])
+
+
+def assert_abstain(body, sentinel, runner):
+    """a hook returning {} for mutate_request must NOT clobber the host's own system prompt:
+    it stays non-empty, and the hook's (never-composed) preamble sentinel never appears. this
+    is the empty-result contract every append/replace host must honor."""
+    if body is None:
+        runner.check("abstain: build request captured", False, "no build request captured")
+        return
+    text = system_text(body)
+    runner.check("abstain: host system prompt preserved (non-empty)",
+                 len(text.strip()) > 0, text[:300])
+    runner.check("abstain: hook preamble sentinel NOT injected",
+                 sentinel not in text, text[:300])
 
 
 def assert_host_capability(body, adapter, runner):

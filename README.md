@@ -2,7 +2,7 @@
 
 a host-agnostic contract for plugging external lifecycle hooks into a
 coding-agent harness. shared across multiple harnesses
-([airun](https://github.com/khimaros/airun),
+([hrns](https://github.com/khimaros/hrns),
 [pi-evolve](https://github.com/khimaros/pi-evolve),
 [opencode-evolve](https://github.com/khimaros/opencode-evolve)); identical
 hook scripts run unchanged against any of them.
@@ -80,7 +80,7 @@ own documentation, not here.
 
 ## reference implementations
 
-- [airun](https://github.com/khimaros/airun): one-shot CLI host.
+- [hrns](https://github.com/khimaros/hrns): one-shot CLI host.
 - [opencode-evolve](https://github.com/khimaros/opencode-evolve):
   opencode plugin host.
 - [pi-evolve](https://github.com/khimaros/pi-evolve):
